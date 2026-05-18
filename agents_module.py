@@ -375,17 +375,33 @@ def run_agents(city: str, user_prompt: str = None) -> Dict:
     if current_state is None:
         return {"success": False, "error": "No state returned from agents"}
 
-    return {
-        "success": True,
-        "city": city,
-        "thread_id": thread_id,
-        "analysis": current_state.analysis_result,
-        "events": current_state.events_result,
-        "search_result": current_state.search_result,
-        "weather": current_state.weather_info.get("weather", ""),
-        "restaurants": current_state.restaurant_recommendations,
-        "workflow_log": current_state.workflow_log,
-    }
+    # app.stream() yields dicts, not Pydantic model instances
+    if isinstance(current_state, dict):
+        weather_info = current_state.get("weather_info", {}) or {}
+        return {
+            "success": True,
+            "city": city,
+            "thread_id": thread_id,
+            "analysis": current_state.get("analysis_result", ""),
+            "events": current_state.get("events_result", ""),
+            "search_result": current_state.get("search_result", ""),
+            "weather": weather_info.get("weather", "") if isinstance(weather_info, dict) else str(weather_info),
+            "restaurants": current_state.get("restaurant_recommendations", ""),
+            "workflow_log": current_state.get("workflow_log", []),
+        }
+    else:
+        weather_info = current_state.weather_info or {}
+        return {
+            "success": True,
+            "city": city,
+            "thread_id": thread_id,
+            "analysis": current_state.analysis_result,
+            "events": current_state.events_result,
+            "search_result": current_state.search_result,
+            "weather": weather_info.get("weather", "") if isinstance(weather_info, dict) else str(weather_info),
+            "restaurants": current_state.restaurant_recommendations,
+            "workflow_log": current_state.workflow_log,
+        }
 
 
 def get_memory_history() -> List[Dict]:
