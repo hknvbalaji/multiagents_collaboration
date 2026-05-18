@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
   <style>
     body { background: #f0f2f5; }
     .navbar-brand { font-weight: 700; letter-spacing: 0.5px; }
@@ -18,7 +19,15 @@
     /* Query results */
     .result-card { border-left: 4px solid #0d6efd; background: #f8f9fa; }
     .weather-badge { font-size: 1rem; }
-    #analysis-output { white-space: pre-wrap; font-size: 0.95rem; line-height: 1.7; }
+
+    /* Markdown rendered output */
+    .md-output { font-size: 0.92rem; line-height: 1.75; }
+    .md-output h1, .md-output h2, .md-output h3 { font-size: 1rem; font-weight: 700; margin-top: 1rem; }
+    .md-output ul, .md-output ol { padding-left: 1.4rem; margin-bottom: 0.5rem; }
+    .md-output li { margin-bottom: 0.15rem; }
+    .md-output strong { font-weight: 600; }
+    .md-output p { margin-bottom: 0.5rem; }
+    .md-output hr { margin: 0.75rem 0; }
 
     /* Workflow timeline */
     .timeline { position: relative; padding-left: 2rem; }
@@ -208,7 +217,7 @@
                 <i class="fa-solid fa-utensils text-success me-2"></i>Restaurant Recommendations
               </div>
               <div class="card-body">
-                <pre id="restaurants-output" class="mb-0 small"></pre>
+                <div id="restaurants-output" class="md-output"></div>
               </div>
             </div>
 
@@ -218,7 +227,7 @@
                 <i class="fa-solid fa-brain me-2"></i>Full AI Analysis
               </div>
               <div class="card-body">
-                <div id="analysis-output"></div>
+                <div id="analysis-output" class="md-output"></div>
               </div>
             </div>
           </div>
@@ -438,17 +447,27 @@ function runQuery() {
   });
 }
 
+function mdToHtml(text) {
+  if (!text) return '<em class="text-muted">Not available</em>';
+  return marked.parse(text);
+}
+
 function displayResults(data) {
   document.getElementById('results-placeholder').style.display = 'none';
   document.getElementById('results-panel').style.display = '';
   document.getElementById('result-city-title').textContent = data.city;
 
+  // Plain text fields (weather, events) use <pre> — keep as textContent
   document.getElementById('weather-output').textContent = data.weather || 'Not available';
-  document.getElementById('events-output').textContent =
-    (data.events || '') + (data.search_result ? '\n\n[Web Search Results]\n' + data.search_result : '');
-  document.getElementById('restaurants-output').textContent =
-    data.restaurants || 'No restaurant data available for this city.';
-  document.getElementById('analysis-output').textContent = data.analysis || 'No analysis available.';
+  const eventsText = (data.events || '') +
+    (data.search_result ? '\n\n[Web Search Results]\n' + data.search_result : '');
+  document.getElementById('events-output').textContent = eventsText || 'Not available';
+
+  // Markdown fields — render via marked.js
+  document.getElementById('restaurants-output').innerHTML =
+    mdToHtml(data.restaurants || 'No restaurant data available for this city.');
+  document.getElementById('analysis-output').innerHTML =
+    mdToHtml(data.analysis || 'No analysis available.');
 }
 
 // ─── Workflow Tab ─────────────────────────────────────────────────────────────
@@ -565,11 +584,11 @@ function showMemoryDetail(threadId) {
           </div>
           <div class="col-12">
             <h6 class="text-muted">Restaurant Recommendations</h6>
-            <pre class="bg-light p-2 rounded small">${(data.restaurant_recommendations || 'N/A').replace(/</g,'&lt;')}</pre>
+            <div class="bg-light p-2 rounded small md-output">${mdToHtml(data.restaurant_recommendations)}</div>
           </div>
           <div class="col-12">
             <h6 class="text-muted">Full Analysis</h6>
-            <pre class="bg-light p-2 rounded small">${(data.analysis_result || 'N/A').replace(/</g,'&lt;')}</pre>
+            <div class="bg-light p-2 rounded small md-output">${mdToHtml(data.analysis_result)}</div>
           </div>
         </div>`;
       new bootstrap.Modal(document.getElementById('memoryModal')).show();

@@ -332,7 +332,7 @@ Please provide:
         response = call_mistral_api(
             model="mistral-tiny",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=600
+            max_tokens=1500
         )
         state.analysis_result = response["choices"][0]["message"]["content"] \
             if response.get("choices") else "Unable to generate analysis."
@@ -458,15 +458,25 @@ def get_checkpoint_detail(thread_id: str) -> Dict:
 
 
 def clear_memory():
-    """Delete agent_memory.db and reset the cached graph."""
+    """Wipe all checkpoint data and reset the cached graph."""
     global _graph_app, _graph_checkpointer, _graph_conn
-    if _graph_conn:
-        try:
-            _graph_conn.close()
-        except Exception:
-            pass
+    try:
+        # Truncate tables via the existing connection if open, otherwise open a fresh one
+        conn = _graph_conn if _graph_conn else (
+            sqlite3.connect(MEMORY_DB_PATH) if os.path.exists(MEMORY_DB_PATH) else None
+        )
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            for (table,) in cursor.fetchall():
+                cursor.execute(f"DELETE FROM {table}")
+            conn.commit()
+            if conn is not _graph_conn:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Could not clear memory tables: {e}")
+
+    # Reset cached graph so next call reinitialises with a clean checkpointer
     _graph_app = None
     _graph_checkpointer = None
     _graph_conn = None
-    if os.path.exists(MEMORY_DB_PATH):
-        os.remove(MEMORY_DB_PATH)
