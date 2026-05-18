@@ -459,24 +459,39 @@ def get_checkpoint_detail(thread_id: str) -> Dict:
 
 def clear_memory():
     """Wipe all checkpoint data and reset the cached graph."""
+    import gc
     global _graph_app, _graph_checkpointer, _graph_conn
-    try:
-        # Truncate tables via the existing connection if open, otherwise open a fresh one
-        conn = _graph_conn if _graph_conn else (
-            sqlite3.connect(MEMORY_DB_PATH) if os.path.exists(MEMORY_DB_PATH) else None
-        )
-        if conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            for (table,) in cursor.fetchall():
-                cursor.execute(f"DELETE FROM {table}")
-            conn.commit()
-            if conn is not _graph_conn:
-                conn.close()
-    except Exception as e:
-        logger.warning(f"Could not clear memory tables: {e}")
 
-    # Reset cached graph so next call reinitialises with a clean checkpointer
+    # Drop all references so SqliteSaver releases the connection
+    old_conn = _graph_conn
     _graph_app = None
     _graph_checkpointer = None
     _graph_conn = None
+
+    if old_conn:
+        try:
+            old_conn.close()
+        except Exception:
+            pass
+
+    # Force CPython to collect the now-unreferenced SqliteSaver and its cursor
+    gc.collect()
+
+    if not os.path.exists(MEMORY_DB_PATH):
+        return
+
+    # Open a brand-new independent connection to wipe the data
+    try:
+        conn = sqlite3.connect(MEMORY_DB_PATH, timeout=10)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        for (table,) in cursor.fetchall():
+            conn.execute(f"DELETE FROM {table}")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        logger.info("Memory cleared successfully")
+    except Exception as e:
+        logger.error(f"Clear memory error: {e}")
+        raise
