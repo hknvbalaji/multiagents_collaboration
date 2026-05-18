@@ -164,6 +164,7 @@ def events_database_tool(city: str) -> str:
                 SELECT event_name, event_date, description
                 FROM local_events
                 WHERE LOWER(city) = LOWER(?)
+                  AND event_date >= DATE('now')
                 ORDER BY event_date
                 LIMIT 3
             """
@@ -409,38 +410,23 @@ def get_memory_history() -> List[Dict]:
     if not os.path.exists(MEMORY_DB_PATH):
         return []
     try:
-        conn = sqlite3.connect(MEMORY_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = {row[0] for row in cursor.fetchall()}
-        if "checkpoints" not in tables:
-            conn.close()
-            return []
+        _, checkpointer = _get_graph()
+        history, seen_threads = [], set()
 
-        cursor.execute(
-            "SELECT thread_id, checkpoint_id, checkpoint FROM checkpoints ORDER BY checkpoint_id DESC"
-        )
-        rows = cursor.fetchall()
-        conn.close()
-
-        history, seen = [], set()
-        for thread_id, checkpoint_id, checkpoint_raw in rows:
-            if thread_id in seen:
+        for tup in checkpointer.list(None, limit=200):
+            thread_id = tup.config.get("configurable", {}).get("thread_id", "")
+            if not thread_id or thread_id in seen_threads:
                 continue
-            seen.add(thread_id)
-            try:
-                checkpoint = json.loads(checkpoint_raw) if checkpoint_raw else {}
-                cv = checkpoint.get("channel_values", {})
-                history.append({
-                    "thread_id": thread_id,
-                    "city": cv.get("city", thread_id.replace("_", " ").title()),
-                    "checkpoint_id": checkpoint_id,
-                    "analysis_preview": cv.get("analysis_result", "")[:200],
-                    "has_events": bool(cv.get("events_result", "")),
-                    "has_restaurants": bool(cv.get("restaurant_recommendations", "")),
-                })
-            except Exception:
-                history.append({"thread_id": thread_id, "city": thread_id, "checkpoint_id": checkpoint_id})
+            seen_threads.add(thread_id)
+            cv = tup.checkpoint.get("channel_values", {})
+            history.append({
+                "thread_id": thread_id,
+                "city": cv.get("city", thread_id.replace("_", " ").title()),
+                "checkpoint_id": tup.checkpoint.get("id", ""),
+                "analysis_preview": str(cv.get("analysis_result", ""))[:200],
+                "has_events": bool(cv.get("events_result", "")),
+                "has_restaurants": bool(cv.get("restaurant_recommendations", "")),
+            })
         return history
     except Exception as e:
         logger.error(f"Memory history error: {e}")
@@ -452,18 +438,12 @@ def get_checkpoint_detail(thread_id: str) -> Dict:
     if not os.path.exists(MEMORY_DB_PATH):
         return {"error": "No memory database found"}
     try:
-        conn = sqlite3.connect(MEMORY_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT checkpoint FROM checkpoints WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
-            (thread_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
+        _, checkpointer = _get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        tup = checkpointer.get_tuple(config)
+        if not tup:
             return {"error": f"No checkpoint found for: {thread_id}"}
-
-        cv = json.loads(row[0]).get("channel_values", {}) if row[0] else {}
+        cv = tup.checkpoint.get("channel_values", {})
         return {
             "thread_id": thread_id,
             "city": cv.get("city", ""),
