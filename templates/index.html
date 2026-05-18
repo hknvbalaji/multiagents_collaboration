@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Agent City Information System</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" />
+  <style>
+    body { background: #f0f2f5; }
+    .navbar-brand { font-weight: 700; letter-spacing: 0.5px; }
+    .tab-content { background: #fff; border: 1px solid #dee2e6; border-top: none;
+                   border-radius: 0 0 8px 8px; padding: 24px; }
+    .nav-tabs .nav-link { font-weight: 500; color: #495057; }
+    .nav-tabs .nav-link.active { color: #0d6efd; font-weight: 600; }
+
+    /* Query results */
+    .result-card { border-left: 4px solid #0d6efd; background: #f8f9fa; }
+    .weather-badge { font-size: 1rem; }
+    #analysis-output { white-space: pre-wrap; font-size: 0.95rem; line-height: 1.7; }
+
+    /* Workflow timeline */
+    .timeline { position: relative; padding-left: 2rem; }
+    .timeline::before { content: ''; position: absolute; left: 0.75rem; top: 0;
+                        bottom: 0; width: 2px; background: #dee2e6; }
+    .timeline-item { position: relative; margin-bottom: 1.5rem; }
+    .timeline-dot { position: absolute; left: -1.8rem; top: 0.3rem; width: 1rem;
+                    height: 1rem; border-radius: 50%; border: 2px solid #fff;
+                    box-shadow: 0 0 0 2px #0d6efd; background: #0d6efd; }
+    .timeline-dot.error { box-shadow: 0 0 0 2px #dc3545; background: #dc3545; }
+    .timeline-dot.skipped { box-shadow: 0 0 0 2px #6c757d; background: #6c757d; }
+    .agent-card { border-radius: 8px; border: 1px solid #e0e0e0; }
+    .agent-card .card-header { font-weight: 600; font-size: 0.95rem; }
+    .preview-text { font-size: 0.85rem; color: #555; font-family: monospace;
+                    background: #f8f9fa; padding: 8px; border-radius: 4px;
+                    max-height: 80px; overflow-y: auto; }
+
+    /* Memory table */
+    .memory-row { cursor: pointer; }
+    .memory-row:hover { background: #f0f4ff !important; }
+
+    /* Spinner overlay */
+    #loading-overlay { display: none; position: fixed; inset: 0;
+                       background: rgba(0,0,0,0.4); z-index: 9999;
+                       align-items: center; justify-content: center; }
+    #loading-overlay.show { display: flex; }
+    .loading-box { background: #fff; border-radius: 12px; padding: 32px 48px;
+                   text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+    .loading-box .spinner-border { width: 3rem; height: 3rem; }
+
+    /* Misc */
+    .badge-source { font-size: 0.75rem; font-weight: 400; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    .city-pill { cursor: pointer; user-select: none; }
+    .city-pill:hover { background: #0d6efd !important; color: #fff !important; }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark bg-primary sticky-top shadow-sm">
+  <div class="container-fluid">
+    <span class="navbar-brand">
+      <i class="fa-solid fa-robot me-2"></i>Multi-Agent City Information System
+    </span>
+    <span class="text-white-50 small">Powered by LangGraph · Mistral · Cohere · Tavily</span>
+  </div>
+</nav>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay">
+  <div class="loading-box">
+    <div class="spinner-border text-primary mb-3" role="status"></div>
+    <div id="loading-msg" class="fw-semibold text-secondary">Running agents...</div>
+    <div class="text-muted small mt-1">This may take 10–30 seconds</div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="container-fluid py-4 px-4">
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs" id="mainTabs">
+    <li class="nav-item">
+      <a class="nav-link active" href="#" onclick="showTab('query')">
+        <i class="fa-solid fa-magnifying-glass me-1"></i>Query
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" href="#" onclick="showTab('workflow')">
+        <i class="fa-solid fa-diagram-project me-1"></i>Agent Workflow
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" href="#" onclick="showTab('memory')">
+        <i class="fa-solid fa-database me-1"></i>Memory Explorer
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" href="#" onclick="showTab('data')">
+        <i class="fa-solid fa-table me-1"></i>Data Explorer
+      </a>
+    </li>
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- ═══════════════════════════ TAB 1: QUERY ═══════════════════════════ -->
+    <div id="tab-query">
+      <div class="row g-4">
+
+        <!-- Input Panel -->
+        <div class="col-md-4">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-primary text-white fw-semibold">
+              <i class="fa-solid fa-city me-2"></i>City Query
+            </div>
+            <div class="card-body">
+
+              <label class="form-label fw-semibold">City Name</label>
+              <input type="text" id="city-input" class="form-control mb-2"
+                     placeholder="e.g. Tampa, New York, Philadelphia" />
+
+              <div class="mb-3">
+                <small class="text-muted">Quick select:</small><br/>
+                <span class="badge bg-light text-dark border city-pill me-1 mt-1"
+                      onclick="setCity('Tampa')">Tampa</span>
+                <span class="badge bg-light text-dark border city-pill me-1 mt-1"
+                      onclick="setCity('Philadelphia')">Philadelphia</span>
+                <span class="badge bg-light text-dark border city-pill me-1 mt-1"
+                      onclick="setCity('New York')">New York</span>
+              </div>
+
+              <label class="form-label fw-semibold">Your Prompt</label>
+              <textarea id="prompt-input" class="form-control mb-1" rows="5"
+                        placeholder="What do you want to know about this city?"></textarea>
+              <small class="text-muted">Leave blank to use the default prompt.</small>
+
+              <div class="mt-3">
+                <label class="form-label fw-semibold text-muted small">Sample prompts:</label>
+                <div class="list-group list-group-flush">
+                  <button class="list-group-item list-group-item-action py-1 small"
+                    onclick="setPrompt(`I'm visiting this city this weekend. What events are happening, what's the weather, what should I wear, and recommend top restaurants?`)">
+                    Weekend visitor
+                  </button>
+                  <button class="list-group-item list-group-item-action py-1 small"
+                    onclick="setPrompt(`I'm planning a full day out with my family. Suggest family-friendly events, check the weather, recommend outfit, and list top-rated family restaurants.`)">
+                    Family day out
+                  </button>
+                  <button class="list-group-item list-group-item-action py-1 small"
+                    onclick="setPrompt(`I have a free afternoon. What outdoor activities make sense given the current weather? What should I wear and where can I eat?`)">
+                    Free afternoon
+                  </button>
+                </div>
+              </div>
+
+              <button class="btn btn-primary w-100 mt-3 fw-semibold"
+                      onclick="runQuery()">
+                <i class="fa-solid fa-play me-2"></i>Run Analysis
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="col-md-8">
+          <div id="results-placeholder" class="text-center text-muted py-5">
+            <i class="fa-solid fa-robot fa-4x mb-3 text-secondary opacity-25"></i>
+            <p class="fs-5">Enter a city and click <strong>Run Analysis</strong> to start.</p>
+            <p class="small">The system will run up to 5 AI agents and return a full city report.</p>
+          </div>
+
+          <div id="results-panel" style="display:none">
+            <div class="d-flex align-items-center mb-3">
+              <h4 class="mb-0 me-2" id="result-city-title"></h4>
+              <span class="badge bg-success">Analysis Complete</span>
+            </div>
+
+            <div class="row g-3 mb-3">
+              <!-- Weather Card -->
+              <div class="col-md-6">
+                <div class="card result-card h-100 shadow-sm">
+                  <div class="card-header fw-semibold bg-info bg-opacity-10">
+                    <i class="fa-solid fa-cloud-sun text-info me-2"></i>Weather
+                  </div>
+                  <div class="card-body">
+                    <pre id="weather-output" class="mb-0 small"></pre>
+                  </div>
+                </div>
+              </div>
+              <!-- Events Card -->
+              <div class="col-md-6">
+                <div class="card result-card h-100 shadow-sm">
+                  <div class="card-header fw-semibold bg-warning bg-opacity-10">
+                    <i class="fa-solid fa-calendar-days text-warning me-2"></i>Events
+                  </div>
+                  <div class="card-body">
+                    <pre id="events-output" class="mb-0 small"></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Restaurants -->
+            <div class="card result-card shadow-sm mb-3">
+              <div class="card-header fw-semibold bg-success bg-opacity-10">
+                <i class="fa-solid fa-utensils text-success me-2"></i>Restaurant Recommendations
+              </div>
+              <div class="card-body">
+                <pre id="restaurants-output" class="mb-0 small"></pre>
+              </div>
+            </div>
+
+            <!-- Full Analysis -->
+            <div class="card shadow-sm border-primary">
+              <div class="card-header fw-semibold bg-primary text-white">
+                <i class="fa-solid fa-brain me-2"></i>Full AI Analysis
+              </div>
+              <div class="card-body">
+                <div id="analysis-output"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ TAB 2: WORKFLOW ════════════════════════ -->
+    <div id="tab-workflow" style="display:none">
+      <div id="workflow-placeholder" class="text-center text-muted py-5">
+        <i class="fa-solid fa-diagram-project fa-4x mb-3 opacity-25"></i>
+        <p class="fs-5">Run a query first to see the agent workflow here.</p>
+      </div>
+      <div id="workflow-panel" style="display:none">
+        <h5 class="mb-1">Agent Execution Timeline</h5>
+        <p class="text-muted small mb-4">Shows which agents ran, in what order, and what each one returned.</p>
+
+        <!-- Route badge -->
+        <div class="mb-3">
+          <span class="fw-semibold">Route taken: </span>
+          <span id="route-badge" class="badge fs-6"></span>
+        </div>
+
+        <div class="timeline" id="timeline-container"></div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ TAB 3: MEMORY ══════════════════════════ -->
+    <div id="tab-memory" style="display:none">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h5 class="mb-0">Agent Memory Explorer</h5>
+          <p class="text-muted small mb-0">Stored in <code>agent_memory.db</code> — persists across sessions.</p>
+        </div>
+        <div>
+          <button class="btn btn-outline-secondary btn-sm me-2" onclick="loadMemory()">
+            <i class="fa-solid fa-refresh me-1"></i>Refresh
+          </button>
+          <button class="btn btn-outline-danger btn-sm" onclick="confirmClearMemory()">
+            <i class="fa-solid fa-trash me-1"></i>Clear All Memory
+          </button>
+        </div>
+      </div>
+
+      <div id="memory-empty" class="text-center text-muted py-5" style="display:none">
+        <i class="fa-solid fa-database fa-3x mb-3 opacity-25"></i>
+        <p>No memory found. Run a query first.</p>
+      </div>
+
+      <div id="memory-table-wrap" style="display:none">
+        <table class="table table-hover table-bordered" id="memory-table">
+          <thead class="table-light">
+            <tr>
+              <th>City</th>
+              <th>Thread ID</th>
+              <th>Has Events?</th>
+              <th>Has Restaurants?</th>
+              <th>Analysis Preview</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="memory-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="modal fade" id="memoryModal" tabindex="-1">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header bg-primary text-white">
+            <h5 class="modal-title" id="modal-title">Checkpoint Detail</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" id="modal-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ TAB 4: DATA EXPLORER ══════════════════ -->
+    <div id="tab-data" style="display:none">
+      <h5 class="mb-1">Data Explorer</h5>
+      <p class="text-muted small mb-3">Browse the raw data the agents query against.</p>
+
+      <ul class="nav nav-pills mb-3" id="dataPills">
+        <li class="nav-item">
+          <a class="nav-link active" href="#" onclick="showDataTab('events')">
+            <i class="fa-solid fa-calendar me-1"></i>Events Database
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="#" onclick="showDataTab('restaurants')">
+            <i class="fa-solid fa-utensils me-1"></i>Restaurant Data
+          </a>
+        </li>
+      </ul>
+
+      <!-- Events Sub-tab -->
+      <div id="data-events">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span id="events-count" class="text-muted small"></span>
+          <div>
+            City filter:
+            <select id="events-city-filter" class="form-select form-select-sm d-inline-block w-auto ms-2"
+                    onchange="filterEventsTable()">
+              <option value="">All Cities</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped table-bordered" id="events-dt">
+            <thead class="table-dark"></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Restaurants Sub-tab -->
+      <div id="data-restaurants" style="display:none">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span id="restaurants-count" class="text-muted small"></span>
+          <div>
+            City filter:
+            <select id="restaurants-city-filter" class="form-select form-select-sm d-inline-block w-auto ms-2"
+                    onchange="filterRestaurantsTable()">
+              <option value="">All Cities</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped table-bordered" id="restaurants-dt">
+            <thead class="table-dark"></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /tab-content -->
+</div><!-- /container -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let lastWorkflowLog = [];
+let eventsData = [];
+let restaurantsData = [];
+let eventsDT = null;
+let restaurantsDT = null;
+
+// ─── Tab Navigation ───────────────────────────────────────────────────────────
+function showTab(name) {
+  ['query','workflow','memory','data'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = (t === name) ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-tabs .nav-link').forEach((el, i) => {
+    el.classList.toggle('active', i === ['query','workflow','memory','data'].indexOf(name));
+  });
+  if (name === 'memory') loadMemory();
+  if (name === 'data') loadDataExplorer();
+}
+
+function showDataTab(name) {
+  document.getElementById('data-events').style.display = name === 'events' ? '' : 'none';
+  document.getElementById('data-restaurants').style.display = name === 'restaurants' ? '' : 'none';
+  document.querySelectorAll('#dataPills .nav-link').forEach((el, i) => {
+    el.classList.toggle('active', (i === 0 && name === 'events') || (i === 1 && name === 'restaurants'));
+  });
+}
+
+// ─── Query Tab ────────────────────────────────────────────────────────────────
+function setCity(city) {
+  document.getElementById('city-input').value = city;
+}
+function setPrompt(text) {
+  document.getElementById('prompt-input').value = text;
+}
+
+function showLoading(msg) {
+  document.getElementById('loading-msg').textContent = msg || 'Running agents...';
+  document.getElementById('loading-overlay').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.remove('show');
+}
+
+function runQuery() {
+  const city = document.getElementById('city-input').value.trim();
+  const prompt = document.getElementById('prompt-input').value.trim();
+  if (!city) { alert('Please enter a city name.'); return; }
+
+  showLoading(`Running agents for ${city}...`);
+
+  fetch('/api/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({city, prompt})
+  })
+  .then(r => r.json())
+  .then(data => {
+    hideLoading();
+    if (!data.success) {
+      alert('Error: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    lastWorkflowLog = data.workflow_log || [];
+    displayResults(data);
+    renderWorkflow(data);
+  })
+  .catch(err => {
+    hideLoading();
+    alert('Request failed: ' + err.message);
+  });
+}
+
+function displayResults(data) {
+  document.getElementById('results-placeholder').style.display = 'none';
+  document.getElementById('results-panel').style.display = '';
+  document.getElementById('result-city-title').textContent = data.city;
+
+  document.getElementById('weather-output').textContent = data.weather || 'Not available';
+  document.getElementById('events-output').textContent =
+    (data.events || '') + (data.search_result ? '\n\n[Web Search Results]\n' + data.search_result : '');
+  document.getElementById('restaurants-output').textContent =
+    data.restaurants || 'No restaurant data available for this city.';
+  document.getElementById('analysis-output').textContent = data.analysis || 'No analysis available.';
+}
+
+// ─── Workflow Tab ─────────────────────────────────────────────────────────────
+function renderWorkflow(data) {
+  const log = data.workflow_log || [];
+  if (!log.length) return;
+
+  document.getElementById('workflow-placeholder').style.display = 'none';
+  document.getElementById('workflow-panel').style.display = '';
+
+  // Route badge
+  const usedSearch = log.some(a => a.agent === 'Online Search Agent');
+  const routeBadge = document.getElementById('route-badge');
+  if (usedSearch) {
+    routeBadge.className = 'badge bg-warning text-dark fs-6';
+    routeBadge.textContent = '⚡ Web Search Path (no local events found)';
+  } else {
+    routeBadge.className = 'badge bg-success fs-6';
+    routeBadge.textContent = '✅ Local DB Path (events found in database)';
+  }
+
+  const agentIcons = {
+    'Events Database Agent': 'fa-database',
+    'Online Search Agent': 'fa-globe',
+    'Weather Agent': 'fa-cloud-sun',
+    'Restaurant Recommendation Agent': 'fa-utensils',
+    'Analysis Agent': 'fa-brain'
+  };
+  const agentColors = {
+    'Events Database Agent': 'primary',
+    'Online Search Agent': 'warning',
+    'Weather Agent': 'info',
+    'Restaurant Recommendation Agent': 'success',
+    'Analysis Agent': 'danger'
+  };
+
+  const container = document.getElementById('timeline-container');
+  container.innerHTML = '';
+
+  log.forEach((item, idx) => {
+    const color = agentColors[item.agent] || 'secondary';
+    const icon = agentIcons[item.agent] || 'fa-robot';
+    const isError = item.status === 'error';
+
+    container.innerHTML += `
+      <div class="timeline-item">
+        <div class="timeline-dot ${isError ? 'error' : ''}"></div>
+        <div class="card agent-card shadow-sm">
+          <div class="card-header d-flex justify-content-between align-items-center bg-${color} bg-opacity-10 border-${color}">
+            <span>
+              <i class="fa-solid ${icon} text-${color} me-2"></i>
+              <strong>${item.agent}</strong>
+            </span>
+            <div>
+              <span class="badge bg-${isError ? 'danger' : 'success'} me-1">
+                ${isError ? '✗ Error' : '✓ Success'}
+              </span>
+              ${item.source ? `<span class="badge bg-light text-dark border badge-source">${item.source}</span>` : ''}
+            </div>
+          </div>
+          <div class="card-body py-2">
+            <div class="preview-text">${(item.preview || '').replace(/</g,'&lt;').replace(/>/g,'&gt;') || '<em class="text-muted">No output</em>'}</div>
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+// ─── Memory Tab ───────────────────────────────────────────────────────────────
+function loadMemory() {
+  fetch('/api/memory')
+    .then(r => r.json())
+    .then(data => {
+      const history = data.history || [];
+      if (!history.length) {
+        document.getElementById('memory-empty').style.display = '';
+        document.getElementById('memory-table-wrap').style.display = 'none';
+        return;
+      }
+      document.getElementById('memory-empty').style.display = 'none';
+      document.getElementById('memory-table-wrap').style.display = '';
+
+      const tbody = document.getElementById('memory-tbody');
+      tbody.innerHTML = history.map(h => `
+        <tr class="memory-row">
+          <td><strong>${h.city || h.thread_id}</strong></td>
+          <td><code>${h.thread_id}</code></td>
+          <td>${h.has_events ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>
+          <td>${h.has_restaurants ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>
+          <td class="small text-muted">${(h.analysis_preview || '').substring(0, 100)}...</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary" onclick="showMemoryDetail('${h.thread_id}')">
+              <i class="fa-solid fa-eye me-1"></i>View
+            </button>
+          </td>
+        </tr>`).join('');
+    });
+}
+
+function showMemoryDetail(threadId) {
+  fetch(`/api/memory/${threadId}`)
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('modal-title').textContent = `Checkpoint: ${data.city || threadId}`;
+      document.getElementById('modal-body').innerHTML = `
+        <div class="row g-3">
+          <div class="col-md-6">
+            <h6 class="text-muted">Weather</h6>
+            <pre class="bg-light p-2 rounded small">${(data.weather_info?.weather || 'N/A').replace(/</g,'&lt;')}</pre>
+          </div>
+          <div class="col-md-6">
+            <h6 class="text-muted">Events</h6>
+            <pre class="bg-light p-2 rounded small">${(data.events_result || 'N/A').replace(/</g,'&lt;')}</pre>
+          </div>
+          <div class="col-12">
+            <h6 class="text-muted">Restaurant Recommendations</h6>
+            <pre class="bg-light p-2 rounded small">${(data.restaurant_recommendations || 'N/A').replace(/</g,'&lt;')}</pre>
+          </div>
+          <div class="col-12">
+            <h6 class="text-muted">Full Analysis</h6>
+            <pre class="bg-light p-2 rounded small">${(data.analysis_result || 'N/A').replace(/</g,'&lt;')}</pre>
+          </div>
+        </div>`;
+      new bootstrap.Modal(document.getElementById('memoryModal')).show();
+    });
+}
+
+function confirmClearMemory() {
+  if (!confirm('Clear all saved agent memory? This cannot be undone.')) return;
+  fetch('/api/memory/clear', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) { loadMemory(); alert('Memory cleared.'); }
+      else alert('Error: ' + data.error);
+    });
+}
+
+// ─── Data Explorer Tab ────────────────────────────────────────────────────────
+let dataLoaded = false;
+
+function loadDataExplorer() {
+  if (dataLoaded) return;
+  dataLoaded = true;
+  loadEventsData();
+  loadRestaurantsData();
+}
+
+function loadEventsData() {
+  fetch('/api/events')
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { document.getElementById('events-count').textContent = data.error; return; }
+      eventsData = data.events || [];
+      document.getElementById('events-count').textContent =
+        `${data.total} events across ${data.cities.length} cities`;
+
+      const cityFilter = document.getElementById('events-city-filter');
+      data.cities.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c; opt.textContent = c;
+        cityFilter.appendChild(opt);
+      });
+
+      renderEventsTable(eventsData);
+    });
+}
+
+function renderEventsTable(rows) {
+  if (eventsDT) { eventsDT.destroy(); }
+  const table = document.getElementById('events-dt');
+  if (!rows.length) { table.innerHTML = '<thead></thead><tbody><tr><td>No data</td></tr></tbody>'; return; }
+
+  const keys = Object.keys(rows[0]);
+  table.querySelector('thead').innerHTML = '<tr>' + keys.map(k =>
+    `<th>${k.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('') + '</tr>';
+  table.querySelector('tbody').innerHTML = rows.map(row =>
+    '<tr>' + keys.map(k => `<td>${row[k] ?? ''}</td>`).join('') + '</tr>'
+  ).join('');
+
+  eventsDT = $(table).DataTable({pageLength: 10, scrollX: true});
+}
+
+function filterEventsTable() {
+  const city = document.getElementById('events-city-filter').value;
+  const filtered = city ? eventsData.filter(r => r.city === city) : eventsData;
+  renderEventsTable(filtered);
+}
+
+function loadRestaurantsData() {
+  fetch('/api/restaurants')
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { document.getElementById('restaurants-count').textContent = data.error; return; }
+      restaurantsData = data.restaurants || [];
+      document.getElementById('restaurants-count').textContent =
+        `${data.total} restaurants across ${data.cities.length} cities`;
+
+      const cityFilter = document.getElementById('restaurants-city-filter');
+      data.cities.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c; opt.textContent = c;
+        cityFilter.appendChild(opt);
+      });
+
+      renderRestaurantsTable(restaurantsData);
+    });
+}
+
+function renderRestaurantsTable(rows) {
+  if (restaurantsDT) { restaurantsDT.destroy(); }
+  const table = document.getElementById('restaurants-dt');
+  if (!rows.length) { table.innerHTML = '<thead></thead><tbody><tr><td>No data</td></tr></tbody>'; return; }
+
+  const keys = ['name','city','state','stars','review_count','categories','is_open'];
+  const available = keys.filter(k => rows[0].hasOwnProperty(k));
+  table.querySelector('thead').innerHTML = '<tr>' + available.map(k =>
+    `<th>${k.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('') + '</tr>';
+  table.querySelector('tbody').innerHTML = rows.map(row =>
+    '<tr>' + available.map(k => {
+      let val = row[k] ?? '';
+      if (k === 'stars') val = `<span class="badge bg-warning text-dark">${val}⭐</span>`;
+      if (k === 'is_open') val = val ? '<span class="badge bg-success">Open</span>' : '<span class="badge bg-danger">Closed</span>';
+      return `<td>${val}</td>`;
+    }).join('') + '</tr>'
+  ).join('');
+
+  restaurantsDT = $(table).DataTable({pageLength: 10, scrollX: true});
+}
+
+function filterRestaurantsTable() {
+  const city = document.getElementById('restaurants-city-filter').value;
+  const filtered = city ? restaurantsData.filter(r => r.city === city) : restaurantsData;
+  renderRestaurantsTable(filtered);
+}
+</script>
+</body>
+</html>
